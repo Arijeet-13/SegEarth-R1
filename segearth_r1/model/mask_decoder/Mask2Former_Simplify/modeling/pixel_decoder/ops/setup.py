@@ -46,6 +46,9 @@ def get_extensions():
             "-D__CUDA_NO_HALF_OPERATORS__",
             "-D__CUDA_NO_HALF_CONVERSIONS__",
             "-D__CUDA_NO_HALF2_OPERATORS__",
+            # If you encounter arch-related compile errors, set the env variable:
+            #   export TORCH_CUDA_ARCH_LIST="8.6"  (adjust to your GPU)
+            # before running make.sh
         ]
     else:
         if CUDA_HOME is None:
