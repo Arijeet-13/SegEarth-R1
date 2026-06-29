@@ -5,6 +5,7 @@ from enum import Enum
 from tqdm import tqdm
 import numpy as np
 from eval_dataset.RS_val_dataset import DataCollector, RRSISDDataset, ReasonSegDataset, RefSegRSDataset
+from segearth_r1.eval_and_test.eval_dataset.liss4_val_dataset import Liss4ReasonSegDataset
 from segearth_r1.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, \
     DEFAULT_IM_END_TOKEN, DEFAULT_SEG_TOKEN, SEG_TOKEN_INDEX ,ANSWER_TOKEN_INDEX
 from segearth_r1.model.builder import load_pretrained_model
@@ -179,6 +180,12 @@ def evaluation():
         )
     if data_args.dataset_type == 'EarthReason':
         eval_dataset = ReasonSegDataset(
+            base_data_path=data_args.base_data_path,
+            tokenizer=tokenizer,
+            split=data_args.data_split,
+        )
+    if data_args.dataset_type == 'Liss4Reason':
+        eval_dataset = Liss4ReasonSegDataset(
             base_data_path=data_args.base_data_path,
             tokenizer=tokenizer,
             split=data_args.data_split,

@@ -15,6 +15,7 @@
 #    limitations under the License.
 
 from train_dataset import *
+from segearth_r1.train.liss4_train_dataset import Liss4ReasonSegDataset
 
 from segearth_r1.mask_config.config import Config
 from fvcore.common.config import CfgNode
@@ -333,6 +334,9 @@ def make_unify_datamodule(tokenizer, data_args, training_args):
     if data_args.dataset_type == 'EarthReason':
         print("current train dataset is EarthReason")
         Data = ReasonSegDataset(base_data_path=base_data_path, tokenizer=tokenizer)
+    if data_args.dataset_type == 'Liss4Reason':
+        print("current train dataset is Liss4Reason")
+        Data = Liss4ReasonSegDataset(base_data_path=base_data_path, tokenizer=tokenizer, split='train')
     if data_args.dataset_type == 'RefSegRS':
         print("current train dataset is RefSegRS")
         Data = RefSegRSDataset(base_data_path=base_data_path, tokenizer=tokenizer)
