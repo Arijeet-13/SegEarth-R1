@@ -413,7 +413,7 @@ class MultiScaleMaskedTransformerDecoderForOPTPreTrain(nn.Module):
         # positional encoding
         N_steps = hidden_dim // 2 # 256 / 2 =128
         self.pe_layer = PositionEmbeddingSine(N_steps, normalize=True)
-
+        self.blank_query_token = nn.Parameter(torch.randn(1, num_queries - 1, hidden_dim)) #Blank query token
         # define Transformer decoder here
         self.num_heads = nheads     # 8
         self.num_layers = dec_layers  # 9
@@ -608,6 +608,7 @@ class MultiScaleMaskedTransformerDecoderForOPTPreTrain(nn.Module):
         src = []
         pos = []
         size_list = []
+        bs = x[0].shape[0]
 
         # disable mask, it does not affect performance
         del mask # None
@@ -625,20 +626,21 @@ class MultiScaleMaskedTransformerDecoderForOPTPreTrain(nn.Module):
         # size_list: [[32, 32], [64, 64], [128, 128]], pos: [[32 * 32, batch_size, 2], [64 * 64, batch_size, 2], [128 * 128, batch_size, 2]], src: [[32 * 32, batch_size, 2], [64 * 64, batch_size, 2], [128 * 128, batch_size, 2]]
         _, bs, _ = src[0].shape # batch_size
 
+        if seg_query is None:
+            blank_token = self.blank_query_token.expand(bs, -1, -1)
+            combined_queries = torch.cat([SEG_embedding, blank_token], dim=1)
+            output = combined_queries.permute(1, 0, 2)
+        else:
+            output = seg_query.permute(1, 0, 2)
+
         # QxNxC
         if self.use_seg_query:
             query_embed = self.query_embed.weight.unsqueeze(1).repeat(1, bs, 1)
         else:
             query_embed = torch.zeros(
-                self.new_query_embed.weight.shape[0], bs, self.new_query_embed.weight.shape[-1], 
-                device=SEG_embedding.device, dtype=SEG_embedding.dtype
+                output.shape[0], bs, output.shape[-1], 
+                device=output.device, dtype=output.dtype
                 )
-            # query_embed = self.new_query_embed.weight.unsqueeze(1).repeat(1, bs, 1) # query_embed: [1, batch_size, mask_dim(256)]
-        if seg_query is None:
-            # output = self.new_query_feat.weight.unsqueeze(1).repeat(1, bs, 1)
-            output = SEG_embedding.permute(1, 0, 2)
-        else:
-            output = seg_query.permute(1, 0, 2) # output: [100, batch_size, mask_dim(256)]
 
         predictions_SEG_class = []
         predictions_class_name_class = []

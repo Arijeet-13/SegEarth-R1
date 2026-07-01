@@ -388,6 +388,8 @@ class Compression_Connector(nn.Module):
         self.fc = nn.Conv2d(c2, c2, 1, 1)
 
     def forward(self, x):
+        if isinstance(x, (list, tuple)):
+            x = x[-1]
         x = self.proj1(x)
         x = self.norm1(x)
         x = self.proj2(x)
@@ -396,6 +398,66 @@ class Compression_Connector(nn.Module):
         B, C, H, W = x.shape
         x = x.view(B, C, H*W).permute(0, 2, 1).contiguous()
         return x
+
+
+class MultiScale_Compression_Connector(nn.Module):
+    def __init__(self, c1=1024, c2=2048, patch_size=3, stride=2, size=16):
+        super().__init__()
+        # c1 is c_res5 (e.g. 1024 or 1536)
+        # c2 is c_out (e.g. 2048)
+        c_res5 = c1
+        c_res4 = c1 // 2
+        c_res3 = c1 // 4
+        c_out = c2
+        
+        # Downsamplers for progressive multi-scale fusion
+        self.down_res3 = nn.Conv2d(c_res3, c_res4, kernel_size=3, stride=2, padding=1)
+        self.down_res4 = nn.Conv2d(c_res4, c_res5, kernel_size=3, stride=2, padding=1)
+        
+        # Original projection layers
+        self.proj1 = nn.Conv2d(c_res5, c_out, patch_size, stride, patch_size//2)
+        self.norm1 = nn.LayerNorm([c_out, size, size])
+        
+        self.proj2 = nn.Conv2d(c_out, c_out, patch_size, stride, patch_size//2)
+        self.norm2 = nn.LayerNorm([c_out, size//2, size//2])
+        
+        self.fc = nn.Conv2d(c_out, c_out, 1, 1)
+
+    def forward(self, x):
+        if isinstance(x, (list, tuple)):
+            assert len(x) >= 4, f"Expected at least 4 hierarchical feature maps, but got {len(x)}"
+            # Swin outputs hierarchical features: [res2, res3, res4, res5]
+            # outs[1] is res3, outs[2] is res4, outs[3] is res5
+            res3 = x[1]
+            res4 = x[2]
+            res5 = x[3]
+            
+            # Progressive feature fusion with spatial alignment check
+            down_res3_out = self.down_res3(res3)
+            if down_res3_out.shape[-2:] != res4.shape[-2:]:
+                down_res3_out = torch.nn.functional.interpolate(
+                    down_res3_out, size=res4.shape[-2:], mode='bilinear', align_corners=False
+                )
+            fused_res4 = res4 + down_res3_out
+            
+            down_res4_out = self.down_res4(fused_res4)
+            if down_res4_out.shape[-2:] != res5.shape[-2:]:
+                down_res4_out = torch.nn.functional.interpolate(
+                    down_res4_out, size=res5.shape[-2:], mode='bilinear', align_corners=False
+                )
+            fused_res5 = res5 + down_res4_out
+        else:
+            fused_res5 = x
+            
+        out = self.proj1(fused_res5)
+        out = self.norm1(out)
+        out = self.proj2(out)
+        out = self.norm2(out)
+        out = self.fc(out)
+        
+        B, C, H, W = out.shape
+        out = out.view(B, C, H*W).permute(0, 2, 1).contiguous()
+        return out
 
 
 class IdentityMap(nn.Module):
@@ -450,6 +512,10 @@ def build_vision_projector(config, delay_load=False, **kwargs):
         out_dim = getattr(config,'projector_outdim',4096) # 2048
         input_dim = getattr(config,'mm_input_embeds',1024) # 1024
         return Compression_Connector(input_dim, out_dim, size=16)
+    if projector_type == 'SparseConv_MultiScale':
+        out_dim = getattr(config,'projector_outdim',4096) # 2048
+        input_dim = getattr(config,'mm_input_embeds',1024) # 1024
+        return MultiScale_Compression_Connector(input_dim, out_dim, size=16)
     
     mlp_gelu_match = re.match(r'^mlp(\d+)x_gelu$', projector_type)
     if mlp_gelu_match:

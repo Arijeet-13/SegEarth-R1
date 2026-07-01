@@ -239,7 +239,7 @@ class segearth_r1(PhiForCausalLM, LlavaMetaForCausalLM):
     def SEG_instance_inference(self, SEG_cls, mask_pred):
         image_size = mask_pred.shape[-2:] 
         scores = F.sigmoid(SEG_cls) if SEG_cls else None
-        scores_per_image, topk_indices = scores.flatten(0, 1).topk(self.test_topk_per_image, sorted=False) if SEG_cls else None, None 
+        scores_per_image, topk_indices = scores.flatten(0, 1).topk(min(self.test_topk_per_image, scores.flatten(0, 1).shape[0]), sorted=False) if SEG_cls else None, None 
         if SEG_cls is not None:
             mask_pred = mask_pred[topk_indices]
         elif mask_pred.shape[0] == 1:
@@ -254,7 +254,7 @@ class segearth_r1(PhiForCausalLM, LlavaMetaForCausalLM):
         }
     def encode_images(self, images):
         image_features = self.get_model().get_vision_tower()(images)
-        image_features = self.get_model().mm_projector(image_features[-1])
+        image_features = self.get_model().mm_projector(image_features)
         return image_features
 
     def predictor_init(self, cfg):
