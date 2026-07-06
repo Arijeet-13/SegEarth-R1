@@ -413,7 +413,7 @@ class MultiScaleMaskedTransformerDecoderForOPTPreTrain(nn.Module):
         # positional encoding
         N_steps = hidden_dim // 2 # 256 / 2 =128
         self.pe_layer = PositionEmbeddingSine(N_steps, normalize=True)
-        self.blank_query_token = nn.Parameter(torch.randn(1, num_queries - 1, hidden_dim)) #Blank query token
+        # self.blank_query_token = nn.Parameter(torch.randn(1, num_queries - 1, hidden_dim)) #Blank query token
         # define Transformer decoder here
         self.num_heads = nheads     # 8
         self.num_layers = dec_layers  # 9
@@ -627,9 +627,10 @@ class MultiScaleMaskedTransformerDecoderForOPTPreTrain(nn.Module):
         _, bs, _ = src[0].shape # batch_size
 
         if seg_query is None:
-            blank_token = self.blank_query_token.expand(bs, -1, -1)
-            combined_queries = torch.cat([SEG_embedding, blank_token], dim=1)
-            output = combined_queries.permute(1, 0, 2)
+            # blank_token = self.blank_query_token.expand(bs, -1, -1)
+            # combined_queries = torch.cat([SEG_embedding, blank_token], dim=1)
+            # output = combined_queries.permute(1, 0, 2)
+            output = SEG_embedding.permute(1, 0, 2)  # Vanilla: single query only
         else:
             output = seg_query.permute(1, 0, 2)
 
