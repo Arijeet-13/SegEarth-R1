@@ -509,9 +509,14 @@ class segearth_r1(PhiForCausalLM, LlavaMetaForCausalLM):
         vision_tower = self.get_vision_tower()
         seg_query_mask = torch.zeros_like(input_ids) if use_seg_query else None
         if vision_tower is None or images is None or input_ids.shape[1] == 1:
-            if past_key_values is not None and vision_tower is not None and images is not None and input_ids.shape[
-                1] == 1:
-                attention_mask = torch.ones((attention_mask.shape[0], past_key_values[-1][-1].shape[-2] + 1),
+            if past_key_values is not None and vision_tower is not None and images is not None and input_ids.shape[1] == 1:
+                if hasattr(past_key_values, 'get_seq_length'):
+                    pkv_len = past_key_values.get_seq_length()
+                elif hasattr(past_key_values, 'key_cache') and len(past_key_values.key_cache) > 0:
+                    pkv_len = past_key_values.key_cache[0].shape[-2]
+                else:
+                    pkv_len = past_key_values[-1][-1].shape[-2]
+                attention_mask = torch.ones((attention_mask.shape[0], pkv_len + 1),
                                             dtype=attention_mask.dtype, device=attention_mask.device)
             return input_ids, attention_mask, past_key_values, None, labels, seg_query_mask, None
 
@@ -753,6 +758,27 @@ class segearth_r1(PhiForCausalLM, LlavaMetaForCausalLM):
             seg_query_mask = None
             input_ids, attention_mask, past_key_values, inputs_embeds, labels = self.mm_conv_prepare_inputs_labels_for_multimodal(
                 input_ids, attention_mask, past_key_values, labels, images)
+        # Reconcile attention_mask width with the actual sequence length.
+        # During generate(), HF tracks attention_mask from the *original*
+        # (pre-image-expansion) prompt and grows it +1 per step, which
+        # doesn't account for the image-token expansion that happened in
+        # prepare_inputs_labels_for_multimodal. Fix it here as a final
+        # safety net before PhiModel sees it.
+        if attention_mask is not None:
+            seq_len = (inputs_embeds.shape[1] if inputs_embeds is not None
+                       else input_ids.shape[1])
+            pkv_len = 0
+            if past_key_values is not None:
+                if hasattr(past_key_values, 'get_seq_length'):
+                    pkv_len = past_key_values.get_seq_length()
+                elif isinstance(past_key_values, (list, tuple)) and len(past_key_values) > 0:
+                    pkv_len = past_key_values[0][0].shape[-2]
+            expected_mask_len = pkv_len + seq_len
+            if attention_mask.shape[1] != expected_mask_len:
+                attention_mask = torch.ones(
+                    (attention_mask.shape[0], expected_mask_len),
+                    dtype=attention_mask.dtype, device=attention_mask.device,
+                )
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         outputs = self.model(
             input_ids=input_ids,
@@ -1143,7 +1169,7 @@ class segearth_r1(PhiForCausalLM, LlavaMetaForCausalLM):
             if isinstance(past_key_values, Cache):
                 cache_len = past_key_values.get_seq_length()
             else:
-                cache_len = past_key_values[0][0].shape[2]
+                cache_len = past_key_values[0][0].shape[-2]
             cur_len = (_inputs["input_ids"].shape[1] if _inputs.get("input_ids") is not None
                        else _inputs["inputs_embeds"].shape[1])
             total_len = cache_len + cur_len
