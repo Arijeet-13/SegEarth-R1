@@ -91,7 +91,14 @@ def generate_candidates(
         pad_token_id=pad_token_id,
         max_new_tokens=max_new_tokens,
         num_return_sequences=num_return,
-        use_cache=True,
+        # use_cache=False: the model's KV-cache-based attention_mask rebuilding
+        # (prepare_inputs_for_generation / the input_ids.shape[1]==1 branch in
+        # prepare_inputs_labels_for_multimodal) computes mask length from raw
+        # token/cache counts and doesn't account for image/refer-token expansion,
+        # causing a width mismatch after the first decode step. Recomputing the
+        # full sequence each step avoids that bug (slower, but correct here since
+        # max_new_tokens is small).
+        use_cache=False,
     )
     if num_beams > 1:
         gen_kwargs.update(num_beams=num_beams, do_sample=False, early_stopping=True)
@@ -384,4 +391,3 @@ def tta_eval(
         })
 
     return merged
-
