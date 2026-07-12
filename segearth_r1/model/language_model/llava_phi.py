@@ -363,6 +363,10 @@ class segearth_r1(PhiForCausalLM, LlavaMetaForCausalLM):
     def embed_refer_ids(self, refer_ids):
         if refer_ids is None:
             return None
+        vocab_size = self.get_model().embed_tokens.weight.shape[0]
+        if (refer_ids < 0).any() or (refer_ids >= vocab_size).any():
+            oob_indices = refer_ids[(refer_ids < 0) | (refer_ids >= vocab_size)]
+            raise ValueError(f"OOB refer token id(s): {oob_indices.cpu().tolist()}, vocab_size={vocab_size}")
         embedded_refer = self.get_model().embed_tokens(refer_ids)
         return embedded_refer
     def concat_image_seg_embeds(self, input_id, img_feature, label, seg_query, seg_query_mask,
@@ -457,7 +461,12 @@ class segearth_r1(PhiForCausalLM, LlavaMetaForCausalLM):
                     cur_new_label.append(token_answer_id)
                      
             else: 
-                cur_new_input_embeds.append(self.get_model().embed_tokens(input_id[:chunk_len])) # 
+                ids_slice = input_id[:chunk_len]
+                vocab_size = self.get_model().embed_tokens.weight.shape[0]
+                if (ids_slice < 0).any() or (ids_slice >= vocab_size).any():
+                    oob_indices = ids_slice[(ids_slice < 0) | (ids_slice >= vocab_size)]
+                    raise ValueError(f"OOB text token id(s): {oob_indices.cpu().tolist()}, vocab_size={vocab_size}")
+                cur_new_input_embeds.append(self.get_model().embed_tokens(ids_slice)) # 
                 if seg_query is not None:
                     cur_new_seg_query_mask.append(seg_query_mask[:chunk_len]) #
                 if refer_embedding_indices is not None:
@@ -524,6 +533,10 @@ class segearth_r1(PhiForCausalLM, LlavaMetaForCausalLM):
             cur_answer_embedding_indices = answer_embedding_indices[batch_idx] if answer_embedding_indices is not None else None
             if (cur_input_ids == IMAGE_TOKEN_INDEX).sum() == 0: 
                 # multimodal LLM, but the current sample is not multimodal
+                vocab_size = self.get_model().embed_tokens.weight.shape[0]
+                if (cur_input_ids < 0).any() or (cur_input_ids >= vocab_size).any():
+                    oob_indices = cur_input_ids[(cur_input_ids < 0) | (cur_input_ids >= vocab_size)]
+                    raise ValueError(f"OOB non-multimodal token id(s): {oob_indices.cpu().tolist()}, vocab_size={vocab_size}")
                 cur_input_embeds = self.get_model().embed_tokens(cur_input_ids)
                 # ensure gradients back propagation, not changing cur_input_embeds
                 cur_input_embeds = cur_input_embeds + (
