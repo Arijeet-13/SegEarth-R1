@@ -510,6 +510,14 @@ class segearth_r1(PhiForCausalLM, LlavaMetaForCausalLM):
         if vision_tower is None or images is None or input_ids.shape[1] == 1:
             if past_key_values is not None and vision_tower is not None and images is not None and input_ids.shape[
                 1] == 1:
+                if hasattr(past_key_values, "key_cache"):
+                    kv_len_0 = past_key_values.key_cache[0].shape
+                    kv_len_last = past_key_values.value_cache[-1].shape
+                    print(f"[DEBUG] past_key_values is DynamicCache. Layer 0 key: {kv_len_0}, Last layer value: {kv_len_last}")
+                else:
+                    kv_len_0 = past_key_values[0][0].shape
+                    kv_len_last = past_key_values[-1][-1].shape
+                    print(f"[DEBUG] past_key_values is tuple. Layer 0 key: {kv_len_0}, Last layer value: {kv_len_last}")
                 attention_mask = torch.ones((attention_mask.shape[0], past_key_values[-1][-1].shape[-2] + 1),
                                             dtype=attention_mask.dtype, device=attention_mask.device)
             return input_ids, attention_mask, past_key_values, None, labels, seg_query_mask, None
