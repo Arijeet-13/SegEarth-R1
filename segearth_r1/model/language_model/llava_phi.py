@@ -681,11 +681,28 @@ class segearth_r1(PhiForCausalLM, LlavaMetaForCausalLM):
                 new_refer_embedding_indices = torch.stack(new_refer_embedding_indices, dim=0)
 
             if attention_mask is not None:
-                new_attn_mask_pad_left = torch.full(
-                    (attention_mask.shape[0], new_input_embeds.shape[1] - input_ids.shape[1]), True,
-                    dtype=attention_mask.dtype, device=attention_mask.device)
-                attention_mask = torch.cat((new_attn_mask_pad_left, attention_mask), dim=1)
-                assert attention_mask.shape == new_input_embeds.shape[:2]
+                # NOTE: pad based on attention_mask's OWN current width, not input_ids.shape[1].
+                # During generation (e.g. best_of_n_search / self_consistency_search calling
+                # model.generate with num_return_sequences > 1), the custom
+                # prepare_inputs_for_generation above may already have resized attention_mask based
+                # on the KV-cache length, so it can differ from input_ids.shape[1]. Computing the
+                # pad from input_ids.shape[1] silently produced a wrong-length mask and crashed the
+                # shape assertion below.
+                pad_len = new_input_embeds.shape[1] - attention_mask.shape[1]
+                if pad_len > 0:
+                    new_attn_mask_pad_left = torch.full(
+                        (attention_mask.shape[0], pad_len), True,
+                        dtype=attention_mask.dtype, device=attention_mask.device)
+                    attention_mask = torch.cat((new_attn_mask_pad_left, attention_mask), dim=1)
+                elif pad_len < 0:
+                    # attention_mask is already wider than the freshly built embeddings
+                    # (can happen once the KV cache is involved) — trim the extra length
+                    # from the left, since left-padded tokens are the oldest ones.
+                    attention_mask = attention_mask[:, -new_input_embeds.shape[1]:]
+                assert attention_mask.shape == new_input_embeds.shape[:2], (
+                    f"attention_mask {attention_mask.shape} vs new_input_embeds "
+                    f"{new_input_embeds.shape[:2]} (input_ids was {input_ids.shape})"
+                )
         return None, attention_mask, past_key_values, new_input_embeds, new_labels, new_seg_query_masks, new_refer_embedding_indices
     
     def get_SEG_embedding(self,hidden_states, refer_embedding_indices, return_all=False):
