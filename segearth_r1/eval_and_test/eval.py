@@ -4,7 +4,7 @@ import torch
 from enum import Enum
 from tqdm import tqdm
 import numpy as np
-from eval_dataset.RS_val_dataset import DataCollector, RRSISDDataset, ReasonSegDataset, RefSegRSDataset
+from eval_dataset.RS_val_dataset import DataCollector, RRSISDDataset, ReasonSegDataset, RefSegRSDataset, preprocess_referring_instruction
 from segearth_r1.eval_and_test.eval_dataset.liss4_val_dataset import Liss4ReasonSegDataset
 from segearth_r1.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, \
     DEFAULT_IM_END_TOKEN, DEFAULT_SEG_TOKEN, SEG_TOKEN_INDEX ,ANSWER_TOKEN_INDEX
@@ -12,6 +12,14 @@ from segearth_r1.model.builder import load_pretrained_model
 from segearth_r1.utils import disable_torch_init
 from segearth_r1.mm_utils import get_model_name_from_path
 from segearth_r1 import conversation as conversation_lib
+from segearth_r1.eval_and_test.search_strategies import (
+    best_of_n_search,
+    self_consistency_search,
+    decode_question_text,
+    tta_eval,
+    PREFIX_INST_REASONING,
+    PREFIX_INST_REFERRING,
+)
 from torch.utils.data import DataLoader
 from typing import Optional
 from dataclasses import dataclass, field
@@ -90,11 +98,19 @@ class AverageMeter(object):
 def compute_metric(intersection_meter, union_meter, acc_iou_meter, pr_meters, cur_res, gt):
     thresholds = [0.5, 0.6, 0.7, 0.8, 0.9]
     for i, result in enumerate(cur_res):
-        gt_mask = gt[i].squeeze(0).int().cuda().contiguous()
-        pred_masks = result["pred_masks"].int().cuda().contiguous()
+        gt_mask = gt[i].squeeze().int().cuda().contiguous()
+        pred_masks = result["pred_masks"].squeeze().int().cuda().contiguous()
 
-        if result["scores"]:
-            scores = torch.tensor(result["scores"])
+        # scores can be a Tensor, list, or None — check properly
+        scores_val = result["scores"]
+        has_scores = False
+        if scores_val is not None:
+            if isinstance(scores_val, torch.Tensor) and scores_val.numel() > 0:
+                has_scores = True
+            elif isinstance(scores_val, (list, tuple)) and len(scores_val) > 0:
+                has_scores = True
+        if has_scores:
+            scores = scores_val if isinstance(scores_val, torch.Tensor) else torch.tensor(scores_val)
             top_idx = torch.topk(scores, 1).indices.cpu().numpy()
             preds_to_eval = pred_masks[top_idx, :]
         else:
@@ -160,6 +176,16 @@ class DataArguments:
     use_seg_query: bool = False
     dataset_type: Optional[str] = field(default="RRSIS-D")
     vis_path: Optional[str] = field(default=None)
+    # Search strategy settings (reasoning tasks only: EarthReason, Liss4Reason)
+    search_strategy: Optional[str] = field(
+        default=None,
+        metadata={"help": "Search strategy for reasoning tasks: 'best_of_n' or 'self_consistency'. Ignored for referring tasks."},
+    )
+    search_n: int = field(default=8, metadata={"help": "Number of candidates for search strategies."})
+    search_temperature: float = field(default=1.0, metadata={"help": "Sampling temperature for search."})
+    search_top_p: float = field(default=0.95, metadata={"help": "Top-p for search sampling."})
+    # TTA settings (referring tasks only: RRSIS-D, RefSegRS)
+    use_tta: bool = field(default=False, metadata={"help": "Enable Test-Time Augmentation for referring tasks."})
 
 def evaluation():
     parser = transformers.HfArgumentParser(DataArguments)
@@ -215,36 +241,110 @@ def evaluation():
         threshold: AverageMeter(f"Pr@{threshold}", ":6.3f", Summary.AVERAGE)
         for threshold in thresholds
     }
+    # Determine task type and validate strategy compatibility
+    is_reasoning_task = data_args.dataset_type in ('EarthReason', 'Liss4Reason')
+    is_referring_task = data_args.dataset_type in ('RRSIS-D', 'RefSegRS')
+
+    if is_reasoning_task:
+        prefix_inst = PREFIX_INST_REASONING
+    else:
+        prefix_inst = PREFIX_INST_REFERRING
+
+    # Validate: search strategies are for reasoning tasks only
+    use_search = False
+    if data_args.search_strategy in ('best_of_n', 'self_consistency'):
+        if is_referring_task:
+            print(f"[Warning] --search_strategy='{data_args.search_strategy}' is only supported "
+                  f"for reasoning tasks (EarthReason, Liss4Reason). Ignoring for {data_args.dataset_type}.")
+        else:
+            use_search = True
+
+    # Validate: TTA is for referring tasks only
+    use_tta = False
+    if data_args.use_tta:
+        if is_reasoning_task:
+            print(f"[Warning] --use_tta is only supported for referring tasks (RRSIS-D, RefSegRS). "
+                  f"Ignoring for {data_args.dataset_type}.")
+        else:
+            use_tta = True
+            print(f"[Info] TTA enabled with augmentations: horizontal flip, vertical flip, h+v flip")
+
     with torch.no_grad():
         for idx, inputs in tqdm(enumerate(eval_dataloader), total=len(eval_dataloader)):
             gt = inputs["masks"]
             inputs = {k: v.to(device) if torch.is_tensor(v) else v for k, v in inputs.items()}
             inputs['token_refer_id'] = [ids.to(device) for ids in inputs['token_refer_id']]
-            if 'token_answer_id' in inputs:
-                inputs['token_answer_id'] = [ids.to(device) for ids in inputs['token_answer_id']]
-                outputs = model.eval_seg(
-                    input_ids=inputs['input_ids'],
-                    attention_mask=inputs['attention_mask'],
-                    images=inputs['images'].float(),
-                    masks=inputs['masks'],
-                    token_refer_id = inputs['token_refer_id'],
-                    refer_embedding_indices=inputs['refer_embedding_indices'],
-                    labels=inputs['labels'],
-                    token_answer_id=inputs['token_answer_id'],
-                    answer_embedding_indices=inputs['answer_embedding_indices']
+
+            if use_search:
+                # Search mode (reasoning tasks): process each item individually
+                batch_size = inputs['input_ids'].shape[0]
+                outputs = []
+                for b in range(batch_size):
+                    item_tensors = {
+                        "input_ids": inputs["input_ids"][b],
+                        "labels": inputs["labels"][b],
+                        "images": inputs["images"][b],
+                        "refer_embedding_indices": inputs["refer_embedding_indices"][b],
+                        "token_refer_id": inputs["token_refer_id"][b],
+                    }
+                    # answer_embedding_indices only exists for reasoning datasets
+                    if "answer_embedding_indices" in inputs:
+                        item_tensors["answer_embedding_indices"] = inputs["answer_embedding_indices"][b]
+                    question_text = decode_question_text(tokenizer, inputs["token_refer_id"][b])
+
+                    search_fn = (
+                        best_of_n_search
+                        if data_args.search_strategy == "best_of_n"
+                        else self_consistency_search
                     )
+                    result = search_fn(
+                        model, tokenizer, item_tensors, question_text, device,
+                        preprocess_referring_instruction=preprocess_referring_instruction,
+                        n=data_args.search_n,
+                        temperature=data_args.search_temperature,
+                        top_p=data_args.search_top_p,
+                        conv_version=data_args.version,
+                        prefix_inst=prefix_inst,
+                    )
+                    # Convert search result to the format compute_metric expects
+                    outputs.append({
+                        "pred_masks": result["mask"].to(device),
+                        "scores": [],  # already best mask selected by search
+                    })
+
+            elif use_tta:
+                # TTA mode (referring tasks): flip augmentations + mask averaging
+                if 'token_answer_id' in inputs:
+                    inputs['token_answer_id'] = [ids.to(device) for ids in inputs['token_answer_id']]
+                outputs = tta_eval(model, inputs, device)
+
             else:
-                outputs = model.eval_seg(
-                    input_ids=inputs['input_ids'],
-                    attention_mask=inputs['attention_mask'],
-                    images=inputs['images'].float(),
-                    masks=inputs['masks'],
-                    token_refer_id = inputs['token_refer_id'],
-                    refer_embedding_indices=inputs['refer_embedding_indices'],
-                    labels=inputs['labels'],
-                    token_answer_id=None,
-                    answer_embedding_indices=None
-                    )
+                # Standard batched eval_seg
+                if 'token_answer_id' in inputs:
+                    inputs['token_answer_id'] = [ids.to(device) for ids in inputs['token_answer_id']]
+                    outputs = model.eval_seg(
+                        input_ids=inputs['input_ids'],
+                        attention_mask=inputs['attention_mask'],
+                        images=inputs['images'].float(),
+                        masks=inputs['masks'],
+                        token_refer_id = inputs['token_refer_id'],
+                        refer_embedding_indices=inputs['refer_embedding_indices'],
+                        labels=inputs['labels'],
+                        token_answer_id=inputs['token_answer_id'],
+                        answer_embedding_indices=inputs['answer_embedding_indices']
+                        )
+                else:
+                    outputs = model.eval_seg(
+                        input_ids=inputs['input_ids'],
+                        attention_mask=inputs['attention_mask'],
+                        images=inputs['images'].float(),
+                        masks=inputs['masks'],
+                        token_refer_id = inputs['token_refer_id'],
+                        refer_embedding_indices=inputs['refer_embedding_indices'],
+                        labels=inputs['labels'],
+                        token_answer_id=None,
+                        answer_embedding_indices=None
+                        )
             # vis
             if data_args.vis_path is not None:
                 os.makedirs(data_args.vis_path, exist_ok=True)

@@ -190,7 +190,8 @@ class segearth_r1(PhiForCausalLM, LlavaMetaForCausalLM):
     # def mask_token_processor()
 
     def get_vision_tower_feature(self, images):
-        features = self.get_model().get_vision_tower()(images)
+        with torch.no_grad():
+            features = self.get_model().get_vision_tower()(images)
         features_dict = {
             'res2': features[0],
             'res3': features[1],
@@ -253,7 +254,8 @@ class segearth_r1(PhiForCausalLM, LlavaMetaForCausalLM):
             "scores": scores,
         }
     def encode_images(self, images):
-        image_features = self.get_model().get_vision_tower()(images)
+        with torch.no_grad():
+            image_features = self.get_model().get_vision_tower()(images)
         image_features = self.get_model().mm_projector(image_features)
         return image_features
 
@@ -363,7 +365,7 @@ class segearth_r1(PhiForCausalLM, LlavaMetaForCausalLM):
             return None
         embedded_refer = self.get_model().embed_tokens(refer_ids)
         return embedded_refer
-    def s(self, input_id, img_feature, label, seg_query, seg_query_mask,
+    def concat_image_seg_embeds(self, input_id, img_feature, label, seg_query, seg_query_mask,
                                     refer_embedding_indices=None, refer_embedding=None,
                                     answer_embedding_indices=None, answer_embedding=None, token_answer_id=None):
         image_token_indices = torch.where(input_id == IMAGE_TOKEN_INDEX)[0] 
