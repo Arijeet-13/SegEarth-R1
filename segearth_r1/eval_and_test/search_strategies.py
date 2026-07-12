@@ -100,6 +100,8 @@ def generate_candidates(
     else:
         gen_kwargs.update(do_sample=False)
 
+    print("image_tensor shape:", image_tensor.shape, "dtype:", image_tensor.dtype,
+          "min:", image_tensor.min().item(), "max:", image_tensor.max().item())
     out = model.generate(**gen_kwargs)
 
     prompt_len = input_ids.shape[1]
