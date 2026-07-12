@@ -1131,7 +1131,7 @@ class segearth_r1(PhiForCausalLM, LlavaMetaForCausalLM):
 
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None,
                                        attention_mask=None, inputs_embeds=None, **kwargs):
-        images = kwargs.pop("images", None)
+        images = kwargs.get("images", None)
         _inputs = super().prepare_inputs_for_generation(
             input_ids, past_key_values=past_key_values,
             attention_mask=attention_mask, inputs_embeds=inputs_embeds, **kwargs
@@ -1140,22 +1140,18 @@ class segearth_r1(PhiForCausalLM, LlavaMetaForCausalLM):
             _inputs["images"] = images
 
         if past_key_values is not None and _inputs.get("attention_mask") is not None:
-            old_mask = _inputs["attention_mask"]
-            # The cache stores the *expanded* (post image/refer-token) sequence
-            # length, but cur_len here is the raw, pre-expansion token count, so
-            # cache_len + cur_len is not comparable to old_mask's width. old_mask
-            # already reflects the correct expanded width from the previous step,
-            # so just grow it by one column per new decode step instead of
-            # recomputing from scratch.
             if isinstance(past_key_values, Cache):
                 cache_len = past_key_values.get_seq_length()
             else:
                 cache_len = past_key_values[0][0].shape[2]
-            if old_mask.shape[1] <= cache_len:
-                pad = torch.ones(
-                    (old_mask.shape[0], cache_len + 1 - old_mask.shape[1]),
-                    dtype=old_mask.dtype, device=old_mask.device)
-                _inputs["attention_mask"] = torch.cat((old_mask, pad), dim=1)
+            cur_len = (_inputs["input_ids"].shape[1] if _inputs.get("input_ids") is not None
+                       else _inputs["inputs_embeds"].shape[1])
+            total_len = cache_len + cur_len
+            old_mask = _inputs["attention_mask"]
+            if old_mask.shape[1] != total_len:
+                _inputs["attention_mask"] = torch.ones(
+                    (old_mask.shape[0], total_len), dtype=old_mask.dtype, device=old_mask.device
+                )
         return _inputs
 
 AutoConfig.register("llava_phi", LlavaConfig)
