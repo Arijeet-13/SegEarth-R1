@@ -171,6 +171,12 @@ def score_candidates(
     results = []
     for text, out in zip(cand_texts, outputs):
         pred_masks = out["pred_masks"]
+        # SEG_instance_inference drops the leading query dim when there's only
+        # one mask query (mask_pred.shape[0] == 1), returning [H, W] instead of
+        # [1, H, W]. Restore it so the [:1]/[best_q:best_q+1] indexing below
+        # always operates on a 3D [Q, H, W] tensor.
+        if pred_masks.dim() == 2:
+            pred_masks = pred_masks.unsqueeze(0)
         scores = out.get("scores")
         # scores is either a Tensor or None (from SEG_instance_inference)
         if scores is not None:
