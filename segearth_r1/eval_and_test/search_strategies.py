@@ -54,7 +54,7 @@ def generate_candidates(
     do_sample: bool = False,
     temperature: float = 1.0,
     top_p: float = 0.95,
-    max_new_tokens: int = 64,
+    max_new_tokens: int = 32,
     conv_version: str = "llava_phi",
     prefix_inst: str = PREFIX_INST,
     seed: Optional[int] = None,
