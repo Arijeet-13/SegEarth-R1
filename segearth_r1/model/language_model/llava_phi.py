@@ -855,6 +855,19 @@ class segearth_r1(PhiForCausalLM, LlavaMetaForCausalLM):
                 loss_SEG_class=loss_SEG_class.detach(),
                 loss_llm=llm_loss.detach(),
             )
+
+        # Fallback return for standard generation/evaluation where batch_dataset_type is empty
+        return CausalOutputWithMask(
+            loss=loss,
+            logits=logits,
+            past_key_values=outputs.past_key_values,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+            loss_mask=torch.tensor(0.0, device=logits.device) if logits is not None else None,
+            loss_dice=torch.tensor(0.0, device=logits.device) if logits is not None else None,
+            loss_SEG_class=torch.tensor(0.0, device=logits.device) if logits is not None else None,
+            loss_llm=loss.detach() if loss is not None else (torch.tensor(0.0, device=logits.device) if logits is not None else None),
+        )
         
     def mm_conv_prepare_inputs_labels_for_multimodal(
         self, input_ids, attention_mask, past_key_values, labels, images
