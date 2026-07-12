@@ -202,6 +202,8 @@ def best_of_n_search(
     prefix_inst: str = PREFIX_INST,
 ) -> dict:
     """Generate N candidate answers, score them, return the best one."""
+    if next(model.parameters()).dtype != torch.float16:
+        model.half()
     image = item_tensors["images"].unsqueeze(0)
     cand_texts = generate_candidates(
         model, tokenizer, image, question_text, device,
@@ -234,6 +236,8 @@ def self_consistency_search(
     Samples N reasoning chains, clusters the resulting masks by IoU,
     and returns the per-pixel majority-vote mask from the largest cluster.
     """
+    if next(model.parameters()).dtype != torch.float16:
+        model.half()
     image = item_tensors["images"].unsqueeze(0)
     cand_texts = generate_candidates(
         model, tokenizer, image, question_text, device,
