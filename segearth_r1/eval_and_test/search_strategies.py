@@ -100,7 +100,8 @@ def generate_candidates(
     else:
         gen_kwargs.update(do_sample=False)
 
-    out = model.generate(**gen_kwargs)
+    with torch.autocast(device_type="cuda", dtype=torch.float16):
+        out = model.generate(**gen_kwargs)
 
     prompt_len = input_ids.shape[1]
     texts = []
@@ -147,17 +148,18 @@ def score_candidates(
         preprocess_referring_instruction(t, tokenizer).to(device) for t in cand_texts
     ]
 
-    outputs = model.eval_seg(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        images=images.float(),
-        masks=None,
-        token_refer_id=token_refer_id,
-        refer_embedding_indices=refer_embedding_indices,
-        labels=labels,
-        token_answer_id=token_answer_id,
-        answer_embedding_indices=answer_embedding_indices,
-    )
+    with torch.autocast(device_type="cuda", dtype=torch.float16):
+        outputs = model.eval_seg(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            images=images.float(),
+            masks=None,
+            token_refer_id=token_refer_id,
+            refer_embedding_indices=refer_embedding_indices,
+            labels=labels,
+            token_answer_id=token_answer_id,
+            answer_embedding_indices=answer_embedding_indices,
+        )
 
     results = []
     for text, out in zip(cand_texts, outputs):
