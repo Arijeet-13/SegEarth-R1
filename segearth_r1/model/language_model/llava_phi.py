@@ -9,6 +9,7 @@ import torch.nn as nn
 from torch.nn import CrossEntropyLoss
 import fvcore.nn.weight_init as weight_init
 from transformers import AutoConfig, AutoModelForCausalLM
+from transformers.cache_utils import Cache
 
 from ..llava_arch import LlavaMetaModel, LlavaMetaForCausalLM
 
@@ -1121,6 +1122,20 @@ class segearth_r1(PhiForCausalLM, LlavaMetaForCausalLM):
         )
         if images is not None:
             _inputs["images"] = images
+
+        if past_key_values is not None and _inputs.get("attention_mask") is not None:
+            if isinstance(past_key_values, Cache):
+                cache_len = past_key_values.get_seq_length()
+            else:
+                cache_len = past_key_values[0][0].shape[2]
+            cur_len = (_inputs["input_ids"].shape[1] if _inputs.get("input_ids") is not None
+                       else _inputs["inputs_embeds"].shape[1])
+            total_len = cache_len + cur_len
+            old_mask = _inputs["attention_mask"]
+            if old_mask.shape[1] != total_len:
+                _inputs["attention_mask"] = torch.ones(
+                    (old_mask.shape[0], total_len), dtype=old_mask.dtype, device=old_mask.device
+                )
         return _inputs
 
 AutoConfig.register("llava_phi", LlavaConfig)
