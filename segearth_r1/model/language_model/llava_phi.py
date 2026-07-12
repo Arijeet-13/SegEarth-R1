@@ -364,9 +364,12 @@ class segearth_r1(PhiForCausalLM, LlavaMetaForCausalLM):
         if refer_ids is None:
             return None
         vocab_size = self.get_model().embed_tokens.weight.shape[0]
-        if (refer_ids < 0).any() or (refer_ids >= vocab_size).any():
-            oob_indices = refer_ids[(refer_ids < 0) | (refer_ids >= vocab_size)]
-            raise ValueError(f"OOB refer token id(s): {oob_indices.cpu().tolist()}, vocab_size={vocab_size}")
+        bad = (refer_ids < 0) | (refer_ids >= vocab_size)
+        if bad.any():
+            raise ValueError(
+                f"[OOB refer/answer token] ids={refer_ids[bad].tolist()}, "
+                f"embed_tokens rows={vocab_size}"
+            )
         embedded_refer = self.get_model().embed_tokens(refer_ids)
         return embedded_refer
     def concat_image_seg_embeds(self, input_id, img_feature, label, seg_query, seg_query_mask,
@@ -463,9 +466,12 @@ class segearth_r1(PhiForCausalLM, LlavaMetaForCausalLM):
             else: 
                 ids_slice = input_id[:chunk_len]
                 vocab_size = self.get_model().embed_tokens.weight.shape[0]
-                if (ids_slice < 0).any() or (ids_slice >= vocab_size).any():
-                    oob_indices = ids_slice[(ids_slice < 0) | (ids_slice >= vocab_size)]
-                    raise ValueError(f"OOB text token id(s): {oob_indices.cpu().tolist()}, vocab_size={vocab_size}")
+                bad = (ids_slice < 0) | (ids_slice >= vocab_size)
+                if bad.any():
+                    raise ValueError(
+                        f"[OOB text token] ids={ids_slice[bad].tolist()}, "
+                        f"embed_tokens rows={vocab_size}, tokenizer/config vocab_size={self.config.vocab_size}"
+                    )
                 cur_new_input_embeds.append(self.get_model().embed_tokens(ids_slice)) # 
                 if seg_query is not None:
                     cur_new_seg_query_mask.append(seg_query_mask[:chunk_len]) #

@@ -196,6 +196,10 @@ def evaluation():
     print(f'current model is {model_path}')
     tokenizer, model, context_len = load_pretrained_model(model_path, None, model_name, model_args=data_args, mask_config=data_args.mask_config, 
                                                           use_seg_query = data_args.use_seg_query, device='cuda')
+    print("tokenizer vocab (len):", len(tokenizer))
+    print("model.config.vocab_size:", model.config.vocab_size)
+    print("embed_tokens rows:", model.get_model().embed_tokens.weight.shape[0])
+    print("lm_head out_features:", model.lm_head.weight.shape[0])
     data_args.is_multimodal = True
     conversation_lib.default_conversation = conversation_lib.conv_templates[data_args.version]
     if data_args.dataset_type == 'RRSIS-D':
