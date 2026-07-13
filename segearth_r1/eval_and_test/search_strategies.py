@@ -54,7 +54,7 @@ def generate_candidates(
     do_sample: bool = False,
     temperature: float = 1.0,
     top_p: float = 0.95,
-    max_new_tokens: int = 32,
+    max_new_tokens: int = 64,
     conv_version: str = "llava_phi",
     prefix_inst: str = PREFIX_INST,
     seed: Optional[int] = None,
@@ -101,13 +101,16 @@ def generate_candidates(
         gen_kwargs.update(do_sample=False)
 
     with torch.autocast(device_type="cuda", dtype=torch.float16):
-        out = model.generate(**gen_kwargs)
-
-    prompt_len = input_ids.shape[1]
-    texts = []
-    for row in out:
-        new_tokens = row[prompt_len:]
-        texts.append(tokenizer.decode(new_tokens, skip_special_tokens=True).strip())
+        texts = []
+        prompt_len = input_ids.shape[1]
+        for _ in range(num_return):
+            single_kwargs = dict(gen_kwargs)
+            single_kwargs["num_return_sequences"] = 1
+            out = model.generate(**single_kwargs)
+            new_tokens = out[0][prompt_len:]
+            texts.append(tokenizer.decode(new_tokens, skip_special_tokens=True).strip())
+            del out
+            torch.cuda.empty_cache()
     return texts
 
 
@@ -129,64 +132,56 @@ def score_candidates(
     ``token_refer_id`` and only rebuilds ``token_answer_id`` per candidate.
     """
     n = len(cand_texts)
-    input_ids = item_tensors["input_ids"].unsqueeze(0).repeat(n, 1).to(device)
-    labels = item_tensors["labels"].unsqueeze(0).repeat(n, 1).to(device)
-    attention_mask = torch.ones_like(input_ids)
-    images = item_tensors["images"].unsqueeze(0).repeat(n, 1, 1, 1).to(device)
-    refer_embedding_indices = (
-        item_tensors["refer_embedding_indices"].unsqueeze(0).repeat(n, 1).to(device)
-    )
-    # answer_embedding_indices may not exist for referring datasets
-    if "answer_embedding_indices" in item_tensors:
-        answer_embedding_indices = (
-            item_tensors["answer_embedding_indices"].unsqueeze(0).repeat(n, 1).to(device)
-        )
-    else:
-        answer_embedding_indices = None
-    token_refer_id = [item_tensors["token_refer_id"].to(device) for _ in range(n)]
-    token_answer_id = [
-        preprocess_referring_instruction(t, tokenizer).to(device) for t in cand_texts
-    ]
-
-    with torch.autocast(device_type="cuda", dtype=torch.float16):
-        outputs = model.eval_seg(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            images=images.float(),
-            masks=None,
-            token_refer_id=token_refer_id,
-            refer_embedding_indices=refer_embedding_indices,
-            labels=labels,
-            token_answer_id=token_answer_id,
-            answer_embedding_indices=answer_embedding_indices,
-        )
-
     results = []
-    for text, out in zip(cand_texts, outputs):
-        pred_masks = out["pred_masks"]
-        # SEG_instance_inference drops the leading query dim when there's only
-        # one mask query (mask_pred.shape[0] == 1), returning [H, W] instead of
-        # [1, H, W]. Restore it so the [:1]/[best_q:best_q+1] indexing below
-        # always operates on a 3D [Q, H, W] tensor.
-        if pred_masks.dim() == 2:
-            pred_masks = pred_masks.unsqueeze(0)
-        scores = out.get("scores")
-        # scores is either a Tensor or None (from SEG_instance_inference)
-        if scores is not None:
-            scores_t = scores if isinstance(scores, torch.Tensor) else torch.tensor(scores)
-            if scores_t.numel() > 0:
-                best_q = int(torch.argmax(scores_t))
-                mask = pred_masks[best_q : best_q + 1]
-                score = float(scores_t[best_q])
+    with torch.autocast(device_type="cuda", dtype=torch.float16):
+        for text in cand_texts:
+            input_ids = item_tensors["input_ids"].unsqueeze(0).to(device)
+            labels = item_tensors["labels"].unsqueeze(0).to(device)
+            attention_mask = torch.ones_like(input_ids)
+            images = item_tensors["images"].unsqueeze(0).to(device)
+            refer_embedding_indices = (
+                item_tensors["refer_embedding_indices"].unsqueeze(0).to(device)
+            )
+            if "answer_embedding_indices" in item_tensors:
+                answer_embedding_indices = (
+                    item_tensors["answer_embedding_indices"].unsqueeze(0).to(device)
+                )
+            else:
+                answer_embedding_indices = None
+            token_refer_id = [item_tensors["token_refer_id"].to(device)]
+            token_answer_id = [preprocess_referring_instruction(text, tokenizer).to(device)]
+
+            outputs = model.eval_seg(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                images=images.float(),
+                masks=None,
+                token_refer_id=token_refer_id,
+                refer_embedding_indices=refer_embedding_indices,
+                labels=labels,
+                token_answer_id=token_answer_id,
+                answer_embedding_indices=answer_embedding_indices,
+            )
+            out = outputs[0]
+            pred_masks = out["pred_masks"]
+            if pred_masks.dim() == 2:
+                pred_masks = pred_masks.unsqueeze(0)
+            scores = out.get("scores")
+            if scores is not None:
+                scores_t = scores if isinstance(scores, torch.Tensor) else torch.tensor(scores)
+                if scores_t.numel() > 0:
+                    best_q = int(torch.argmax(scores_t))
+                    mask = pred_masks[best_q : best_q + 1]
+                    score = float(scores_t[best_q])
+                else:
+                    mask = pred_masks[:1] if pred_masks.dim() >= 2 else pred_masks.unsqueeze(0)
+                    score = 0.0
             else:
                 mask = pred_masks[:1] if pred_masks.dim() >= 2 else pred_masks.unsqueeze(0)
-                score = 0.0
-        else:
-            mask = pred_masks[:1] if pred_masks.dim() >= 2 else pred_masks.unsqueeze(0)
-            # pred_masks from eval_seg are already binarized (> 0).float(),
-            # so .mean() gives the foreground ratio as a confidence proxy.
-            score = float(mask.float().mean())
-        results.append({"text": text, "mask": mask.detach().cpu(), "score": score})
+                score = float(mask.float().mean())
+            results.append({"text": text, "mask": mask.detach().cpu(), "score": score})
+            del outputs, out, pred_masks, mask
+            torch.cuda.empty_cache()
     return results
 
 
