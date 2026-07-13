@@ -237,6 +237,24 @@ def evaluation():
     else:
         dtype = torch.float32
     model.to(device=device, dtype=dtype).eval()
+    vision_tower = model.get_vision_tower()
+    if vision_tower is not None:
+        vision_tower.to(device=device, dtype=dtype)
+        
+    dtypes = {}
+    devices = {}
+    for name, param in model.named_parameters():
+        dtypes[param.dtype] = dtypes.get(param.dtype, 0) + param.numel()
+        devices[param.device] = devices.get(param.device, 0) + param.numel()
+    print("Model parameter dtypes summary:", dtypes)
+    print("Model parameter devices summary:", devices)
+    
+    buffers_dtypes = {}
+    for name, buf in model.named_buffers():
+        buffers_dtypes[buf.dtype] = buffers_dtypes.get(buf.dtype, 0) + buf.numel()
+    print("Model buffer dtypes summary:", buffers_dtypes)
+    
+    torch.cuda.empty_cache()
     intersection_meter = AverageMeter("Intersec", ":6.3f", Summary.SUM)
     union_meter = AverageMeter("Union", ":6.3f", Summary.SUM)
     acc_iou_meter = AverageMeter("gIoU", ":6.3f", Summary.SUM)
