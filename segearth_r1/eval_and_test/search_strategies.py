@@ -87,7 +87,7 @@ def generate_candidates(
     gen_kwargs = dict(
         input_ids=input_ids,
         attention_mask=attention_mask,
-        images=image_tensor.to(device).float(),
+        images=image_tensor.to(device=device, dtype=model.dtype),
         pad_token_id=pad_token_id,
         max_new_tokens=max_new_tokens,
         num_return_sequences=num_return,
@@ -100,7 +100,7 @@ def generate_candidates(
     else:
         gen_kwargs.update(do_sample=False)
 
-    with torch.autocast(device_type="cuda", dtype=torch.float16):
+    with torch.autocast(device_type="cuda", dtype=model.dtype):
         texts = []
         prompt_len = input_ids.shape[1]
         for _ in range(num_return):
@@ -133,7 +133,7 @@ def score_candidates(
     """
     n = len(cand_texts)
     results = []
-    with torch.autocast(device_type="cuda", dtype=torch.float16):
+    with torch.autocast(device_type="cuda", dtype=model.dtype):
         for text in cand_texts:
             input_ids = item_tensors["input_ids"].unsqueeze(0).to(device)
             labels = item_tensors["labels"].unsqueeze(0).to(device)
@@ -154,7 +154,7 @@ def score_candidates(
             outputs = model.eval_seg(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
-                images=images.float(),
+                images=images.to(dtype=model.dtype),
                 masks=None,
                 token_refer_id=token_refer_id,
                 refer_embedding_indices=refer_embedding_indices,
@@ -335,7 +335,7 @@ def tta_eval(
         kwargs = dict(
             input_ids=inputs["input_ids"],
             attention_mask=inputs["attention_mask"],
-            images=images_tensor.float(),
+            images=images_tensor.to(dtype=model.dtype),
             masks=inputs["masks"],
             token_refer_id=inputs["token_refer_id"],
             refer_embedding_indices=inputs["refer_embedding_indices"],

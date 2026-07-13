@@ -232,7 +232,11 @@ def evaluation():
     eval_dataloader = DataLoader(eval_dataset, batch_size=dataloader_params['batch_size'], collate_fn=data_collator,
                                  num_workers=dataloader_params['num_workers'])
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    model.to(device=device,dtype=torch.float).eval()
+    if device == 'cuda':
+        dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+    else:
+        dtype = torch.float32
+    model.to(device=device, dtype=dtype).eval()
     intersection_meter = AverageMeter("Intersec", ":6.3f", Summary.SUM)
     union_meter = AverageMeter("Union", ":6.3f", Summary.SUM)
     acc_iou_meter = AverageMeter("gIoU", ":6.3f", Summary.SUM)
@@ -332,7 +336,7 @@ def evaluation():
                     outputs = model.eval_seg(
                         input_ids=inputs['input_ids'],
                         attention_mask=inputs['attention_mask'],
-                        images=inputs['images'].float(),
+                        images=inputs['images'].to(dtype=model.dtype),
                         masks=inputs['masks'],
                         token_refer_id = inputs['token_refer_id'],
                         refer_embedding_indices=inputs['refer_embedding_indices'],
@@ -344,7 +348,7 @@ def evaluation():
                     outputs = model.eval_seg(
                         input_ids=inputs['input_ids'],
                         attention_mask=inputs['attention_mask'],
-                        images=inputs['images'].float(),
+                        images=inputs['images'].to(dtype=model.dtype),
                         masks=inputs['masks'],
                         token_refer_id = inputs['token_refer_id'],
                         refer_embedding_indices=inputs['refer_embedding_indices'],
