@@ -110,6 +110,8 @@ def generate_candidates(
             new_tokens = out[0][prompt_len:]
             texts.append(tokenizer.decode(new_tokens, skip_special_tokens=True).strip())
             del out
+            import gc
+            gc.collect()
             torch.cuda.empty_cache()
     return texts
 

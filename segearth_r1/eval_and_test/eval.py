@@ -1,4 +1,5 @@
 import os
+os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 import cv2
 import torch
 from enum import Enum
@@ -334,11 +335,8 @@ def evaluation():
                         "scores": [],  # already best mask selected by search
                     })
 
-                    # Free cached (unfragmented) blocks after each item's search —
-                    # best_of_n/self_consistency search allocates a lot of
-                    # short-lived activations (n candidates x generation +
-                    # scoring), and clearing here reduces fragmentation buildup
-                    # across the 1133-item loop.
+                    import gc
+                    gc.collect()
                     torch.cuda.empty_cache()
 
             elif use_tta:
